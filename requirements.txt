@@ -1,0 +1,3 @@
+pynuance
+-e git+https://github.com/TuxEatPi/common.git#egg=tuxeatpi-common
+-e git+https://github.com/TuxEatPi/python-aio-etcd.git@0.4.5.0.tep.1#egg=aio_etcd

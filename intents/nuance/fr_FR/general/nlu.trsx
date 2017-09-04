@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<project xmlns:nuance="https://developer.nuance.com/mix/nlu/trsx" xml:lang="fr-FR" nuance:version="2.0">
+  <ontology base="http://developer.nuance.com/mix/nlu/trsx/ontology-1.0">
+    <intents>
+      <intent name="nlu__test"/>
+    </intents>
+  </ontology>
+  <dictionaries>
+  </dictionaries>
+  <samples>
+    <sample intentref="nlu__test">
+      Test de compréhension
+    </sample>
+    <sample intentref="nlu__test">
+      Test de NLU
+    </sample>
+    <sample intentref="nlu__test">
+      toto
+    </sample>
+  </samples>
+</project>

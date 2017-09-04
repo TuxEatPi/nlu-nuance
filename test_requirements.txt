@@ -1,0 +1,10 @@
+# doc
+sphinx==1.6.3
+sphinx-rtd-theme==0.2.4
+sphinxcontrib-mermaid==0.2.1
+# dev
+pylint
+pycodestyle
+pytest
+pytest-cov==2.5.1
+pytest-html==1.15.1
