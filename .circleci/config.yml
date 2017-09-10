@@ -1,0 +1,83 @@
+# Workflow
+workflows:
+  version: 2
+  test__dockerhub:
+    jobs:
+      - test
+      - build_docker_latest:
+          requires:
+            - test
+          filters:
+            branches:
+              only: master
+            tags:
+                only: /.*/
+# Tasks
+version: 2
+jobs:
+  # Tests
+  test:
+    docker:
+      - image: circleci/python:3.6.1
+      - image: eclipse-mosquitto:latest
+      - image: quay.io/coreos/etcd
+        command:
+        - /usr/local/bin/etcd
+        - --data-dir=/etcd-data
+        - --listen-client-urls=http://0.0.0.0:2379
+        - --advertise-client-urls=http://127.0.0.1:2379
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+          - v1-dependencies-{{ checksum "requirements.txt" }}
+          - v1-dependencies-{{ checksum "test_requirements.txt" }}
+          # fallback to using the latest cache if no exact match is found
+          - v1-dependencies-
+      - run:
+          name: install dependencies
+          command: |
+            python3 -m venv venv
+            . venv/bin/activate
+            sudo apt-get update && sudo apt-get install -y gcc make portaudio19-dev libsamplerate0-dev libspeex-dev libspeexdsp-dev libopus-dev
+            pip install numpy
+            pip install --exists-action s -r requirements.txt --upgrade --force
+            pip install -r test_requirements.txt --upgrade
+            pip install codeclimate-test-reporter
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum "requirements.txt" }}
+      # run tests!
+      - run:
+          name: run tests
+          command: |
+            . venv/bin/activate
+            python setup.py develop
+            pycodestyle --max-line-length=100 tuxeatpi_speech_nuance
+            pylint --rcfile=.pylintrc -r no tuxeatpi_speech_nuance
+            pytest --html=pytest/report.html --self-contained-html --junit-xml=pytest/junit.xml --cov=tuxeatpi_speech_nuance/ --cov-report=term --cov-report=html:pytest/coverage/html --cov-report=xml:pytest/coverage/coverage.xml tests 
+            # Maybe useless
+            coverage combine || true
+            coverage report --include='*/tuxeatpi_speech_nuance/*'
+      - store_artifacts:
+          path: pytest/
+          destination: test_results/
+      # Useless for now waiting for update from circleCI UI
+      - store_test_results:
+          path: pytest/
+  # Trigger dockerhub
+  build_docker_latest:
+    docker:
+      - image: docker:17.05.0-ce-git
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Push to Docker Hub
+          command: |
+            docker build -t tuxeatpi/speech-nuance:latest -f Dockerfile .
+            docker login -u $DOCKERHUB_USER -p $DOCKERHUB_PASSWORD
+            docker push tuxeatpi/speech-nuance:latest

@@ -1,3 +1,4 @@
+"""Module customizing initialization for the Nuance NLU component"""
 import os
 
 from tuxeatpi_common.initializer import Initializer
@@ -5,11 +6,13 @@ from pynuance import credentials
 
 
 class NLUInitializer(Initializer):
+    """Custom initializer for the Nuance NLU component"""
 
     def __init__(self, component):
         Initializer.__init__(self, component)
 
     def get_nuance_cookies(self, force=False):
+        """Get Nuance website cookies using username/password"""
         if not os.path.isfile(self.component._cookies_file) or force:
             self.logger.info("Get Mix cookies...")
             credentials.save_cookies(self.component._cookies_file,
@@ -20,9 +23,10 @@ class NLUInitializer(Initializer):
             self.logger.info("Mix cookies already here")
 
     def run(self):
-        self.get_nuance_cookies()
-
+        """Run method overriding the standard one"""
         Initializer.run(self)
+        # TODO check if this is needed
+        self.get_nuance_cookies()
         intents = self.component.intents.read(self.component.settings.nlu_engine,
                                               recursive=True, wait=False)
         for intent in intents.children:

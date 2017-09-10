@@ -16,6 +16,7 @@ CONFIDENCE_THRESHOLD = 0.7
 
 
 class NLU(TepBaseDaemon):
+    """Nuance Communications Service based NLU component class"""
 
     def __init__(self, name, workdir, intent_folder, dialog_folder, logging_level=logging.INFO):
         TepBaseDaemon.__init__(self, name, workdir, intent_folder, dialog_folder, logging_level)
@@ -26,7 +27,7 @@ class NLU(TepBaseDaemon):
         self.username = None
         self.password = None
         self._initializer = NLUInitializer(self)
-        self.models_folder = "models"
+        self.models_folder = os.path.abspath(os.path.join(self.workdir, "models"))
         self._cookies_file = os.path.abspath(os.path.join(self.workdir, "cookies.json"))
 
     def main_loop(self):
@@ -163,8 +164,8 @@ class NLU(TepBaseDaemon):
         # Send file
         with open(model_filepath, "w") as mfh:
             mfh.write(model_data)
-        mix.upload_model(model_fullname, model_filepath, cookies_file=self._cookies_file)
         self.logger.info("Uploading %s", intent_id)
+        mix.upload_model(model_fullname, model_filepath, cookies_file=self._cookies_file)
         # Train model
         mix.train_model(model_fullname, cookies_file=self._cookies_file)
         self.logger.info("Training %s/%s/%s/%s",
@@ -191,7 +192,7 @@ class NLU(TepBaseDaemon):
             mix.model_build_attach(model_fullname, context_tag=model_name,
                                    cookies_file=self._cookies_file)
             self.logger.info("Build %s ready", intent_id)
-        except Exception:
+        except Exception:  # pylint: disable=W0703
             # Build already attached
             # TODO clean this
             pass
