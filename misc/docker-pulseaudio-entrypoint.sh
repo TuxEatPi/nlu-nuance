@@ -18,7 +18,7 @@ if [ "$1" = 'tep' ]; then
 
 	fi
 
-    exec su tep -c "tep-speech-nuance -w /tmp -I /intents -D /dialogs"
+    exec su tep -c "tep-nlu-nuance -w /tmp -I /intents -D /dialogs"
 
 fi
 

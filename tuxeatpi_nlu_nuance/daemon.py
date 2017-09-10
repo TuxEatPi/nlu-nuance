@@ -12,9 +12,6 @@ from pynuance import nlu
 from pynuance import mix
 
 
-CONFIDENCE_THRESHOLD = 0.7
-
-
 class NLU(TepBaseDaemon):
     """Nuance Communications Service based NLU component class"""
 
@@ -26,6 +23,7 @@ class NLU(TepBaseDaemon):
         self.app_key = None
         self.username = None
         self.password = None
+        self._confidence_threshold = 0.7
         self._initializer = NLUInitializer(self)
         self.models_folder = os.path.abspath(os.path.join(self.workdir, "models"))
         self._cookies_file = os.path.abspath(os.path.join(self.workdir, "cookies.json"))
@@ -49,6 +47,7 @@ class NLU(TepBaseDaemon):
         self.app_key = config.get("app_key")
         self.username = config.get("username")
         self.password = config.get("password")
+        self._confidence_threshold = config.get("confidence_threshold", 0.7)
         return True
 
     @is_mqtt_topic("text")
@@ -57,16 +56,35 @@ class NLU(TepBaseDaemon):
         self.logger.info("nlu/text called with test %s", text)
         # Start nlu
         raw_result = nlu.understand_text(self.app_id, self.app_key, context_tag,
-                                         self.settings.language, text)
-        self.logger.debug(raw_result)
-        result = self._handle_nlu_return(raw_result).get("result", {})
+                                         text, self.settings.language)
         # We got a result
-        if result is None or result["module"] is None:
-            # TODO
+        self.logger.debug(raw_result)
+        result = self._handle_nlu_return(raw_result)
+
+        if result.get("error") in ('NO_MATCH', 'BAD_INTENT_NAME'):
+            # No match
             self.logger.error(result)
+            data = {"arguments": {"text": self.get_dialog("not_understand")}}
+            topic = "speech/say"
+            message = Message(topic=topic, data=data)
+            self.publish(message)
+            return
+        elif result.get("error") == "NEED_CONFIRMATION":
+            self.logger.warning(result)
+            data = {"arguments": {"text": self.get_dialog("uncertain")}}
+            topic = "speech/say"
+            message = Message(topic=topic, data=data)
+            self.publish(message)
+            return
+        elif result.get("error") == "CAN_NOT_DO_IT":
+            self.logger.warning(result)
+            data = {"arguments": {"text": self.get_dialog("uncertain")}}
+            topic = "speech/say"
+            message = Message(topic=topic, data=data)
+            self.publish(message)
             return
         # Send request
-        topic = "/".join((result["module"], result["capacity"]))
+        topic = "/".join((result["component"], result["capacity"]))
         data = {"arguments": result.get("arguments", {})}
         message = Message(topic=topic, data=data)
         self.logger.info("Publish %s with argument %s", message.topic, message.payload)
@@ -76,48 +94,162 @@ class NLU(TepBaseDaemon):
     def audio(self, context_tag="general"):
         """Try to understand from microphone"""
         self.logger.info("nlu/audio called")
-        print(self.settings.language)
-        # Disabling hotword
-        topic = "hotword/disable"
-        data = {"arguments": {}}
-        message = Message(topic=topic, data=data)
-        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
-        self.publish(message)
-        # Start nlu
-        raw_result = nlu.understand_audio(self.app_id, self.app_key, context_tag,
-                                          self.settings.language)
-        # Enabling hotword
-        topic = "hotword/enable"
-        data = {"arguments": {}}
-        message = Message(topic=topic, data=data)
-        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
-        self.publish(message)
-        # We got a result
-        self.logger.debug(raw_result)
-        if self._handle_nlu_return(raw_result) is None:
-            # TODO do something ???
-            return
-        result = self._handle_nlu_return(raw_result).get("result", {})
-        if result["module"] is None:
-            # TODO
-            self.logger.error(result)
-            return
-        topic = "/".join((result["module"], result["capacity"]))
-        data = {"arguments": result.get("arguments", {})}
-        message = Message(topic=topic, data=data)
-        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
-        self.publish(message)
+
+        self._disable_hotword()
+
+        nlu_listening = True
+        try:
+            while nlu_listening:
+                # Start nlu
+                raw_result = nlu.understand_audio(self.app_id, self.app_key, context_tag,
+                                                  self.settings.language)
+                # We got a result
+                self.logger.debug(raw_result)
+                result = self._handle_nlu_return(raw_result)
+                if result.get("error") == "NO_INTERPRETATION":
+                    # No interpretation found
+                    # This could mean: microphone muted, nobody spoke, ???
+                    # For now, we just do nothing
+                    self.logger.warning(result)
+                    self._enable_hotword()
+                    return
+                elif result.get("error") in ('NO_MATCH', 'BAD_INTENT_NAME'):
+                    # No match
+                    self.logger.error("Error %s: %s", result.get("error"), result)
+                    self._enable_hotword()
+                    data = {"arguments": {"text": self.get_dialog("not_understand")}}
+                    topic = "speech/say"
+                    message = Message(topic=topic, data=data)
+                    self.publish(message)
+                    return
+                elif result.get("error") == "NEED_CONFIRMATION":
+                    # Confidence too low
+                    self.logger.warning("Confirmation needed: %s", result)
+                    self._enable_hotword()
+                    data = {"arguments": {"text": self.get_dialog("uncertain")}}
+                    topic = "speech/say"
+                    message = Message(topic=topic, data=data)
+                    self.publish(message)
+                    nlu_listening = True
+                    continue
+                elif result.get("error") == "CAN_NOT_DO_IT":
+                    # missing component
+                    self.logger.warning("Capacity not available: %s", result)
+                    self._enable_hotword()
+                    data = {"arguments": {"text": self.get_dialog("can_not_do_it")}}
+                    topic = "speech/say"
+                    message = Message(topic=topic, data=data)
+                    self.publish(message)
+                    return
+                else:
+                    # We can handle the intent
+                    nlu_listening = False
+                    self._enable_hotword()
+                    # Send request
+                    topic = "/".join((result["component"], result["capacity"]))
+                    data = {"arguments": result.get("arguments", {})}
+                    message = Message(topic=topic, data=data)
+                    self.logger.info("Publish %s with argument %s", message.topic, message.payload)
+                    self.publish(message)
+                    return
+        # TODO improve this except
+        except Exception as exp:
+            # Reenable hotword if we have an error
+            self.logger.error(exp)
+            self._enable_hotword()
 
     @is_mqtt_topic("test")
     def test(self):
         """NLU test to"""
         self.logger.info("nlu/test called")
         data = {"arguments": {"text": self.get_dialog("i_understand")}}
-        topic = "speak/say"
+        topic = "speech/say"
         message = Message(topic=topic, data=data)
         self.publish(message)
 
-#    @is_mqtt_topic("send_intent")
+    @is_mqtt_topic("help")
+    def help_(self):
+        pass
+
+    @is_mqtt_topic("shutdown")
+    def shutdown(self):
+        super(NLU, self).shutdown()
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    @is_mqtt_topic("reload")
+    def reload(self):
+        pass
+
+    def _handle_nlu_return(self, nlu_return):
+        """Handle nlu return by parsing result and formatting result
+        to be transmission ready
+        """
+        result = {"component": None,
+                  "capacity": None,
+                  "arguments": None,
+                  "confidence": None,
+                  "error": None,
+                  }
+        self.logger.debug(nlu_return)
+        interpretations = nlu_return.get("nlu_interpretation_results", {}).\
+            get("payload", {}).get("interpretations", {})
+        self.logger.info("Literals: %s",
+                         [i.get("literal") for i in interpretations])
+        self.logger.info("Interpretations: %s",
+                         [i.get("action", {}).get("intent", {}) for i in interpretations])
+        # Not interpretations found
+        if not interpretations:
+            self.logger.warning("No interpretation found")
+            result['error'] = "NO_INTERPRETATION"
+            return result
+        # TODO: what about if len(interpretations) > 1 ??
+        interpretation = interpretations[0]
+        # Process the first interpretation
+        intent = interpretation.get("action", {}).get("intent", {})
+        result['confidence'] = intent.get("confidence")
+        # Check intents
+        if intent.get("value") == "NO_MATCH":
+            # I don't understand :/
+            self.logger.critical("No intent matched")
+            result['error'] = intent.get("value")
+            return result
+        # Check intent name
+        if len(intent.get("value").rsplit("__", 1)) != 2:
+            # TODO improve me
+            # One intent was bad named in NLU....
+            self.logger.critical("BAD Intent name: {}".format(intent.get("value")))
+            result['error'] = "BAD_INTENT_NAME"
+            return result
+        # Check confidence
+        if result['confidence'] < self._confidence_threshold:
+            # TODO improve me
+            # I'm not sure to understand :/
+            self.logger.warning("Need confirmation - confidence: %s - %s", result['confidence'], result)
+            result['error'] = "NEED_CONFIRMATION"
+            return result
+        # Something was understood
+        component, capacity = intent.get("value").rsplit("__", 1)
+        # Check if the component is alive
+        _states = self.registry.read()
+        # TODO improve component/capacity check
+        alive_components = [c for c, s in _states.items() if s.get('state') == 'ALIVE']
+        if component not in alive_components:
+            result['error'] = "CAN_NOT_DO_IT"
+            return result
+        # Get intent's arguments
+        arguments = {}
+        for name, data in interpretation.get("concepts", {}).items():
+            arguments[name] = data[0].get('value')
+        # Prepare result
+        result['component'] = component.replace("__", ".")
+        result['capacity'] = capacity
+        result['arguments'] = arguments
+        result['confidence'] = intent.get("confidence")
+        self.logger.info("Result: %s", result)
+
+        # Return result
+        return result
+
     def send_intent(self, intent_name, intent_lang, component_name, intent_file, intent_data):
         """Send intent (model) to Nuance Mix and activate it"""
         intent_id = "/".join((intent_lang, intent_name, intent_file))
@@ -199,82 +331,21 @@ class NLU(TepBaseDaemon):
         # Send message for result
         self.logger.info("Intent %s updated on Mix website", intent_id)
 
-    @is_mqtt_topic("help")
-    def help_(self):
-        pass
+    def _enable_hotword(self):
+        """Enable hotword"""
+        topic = "hotword/enable"
+        data = {"arguments": {}}
+        message = Message(topic=topic, data=data)
+        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
+        self.publish(message)
 
-    @is_mqtt_topic("shutdown")
-    def shutdown(self):
-        super(NLU, self).shutdown()
-        os.kill(os.getpid(), signal.SIGTERM)
-
-    @is_mqtt_topic("reload")
-    def reload(self):
-        pass
-
-    def _handle_nlu_return(self, nlu_return):
-        """Handle nlu return by parsing result and formatting result
-        to be transmission ready
-        """
-        result = {"module": None,
-                  "capacity": None,
-                  "arguments": None,
-                  "confidence": None,
-                  "need_confirmation": False,
-                  "error": None,
-                  }
-        interpretations = nlu_return.get("nlu_interpretation_results", {}).\
-            get("payload", {}).get("interpretations", {})
-        # TODO: what about if len(interpretations) > 1 ??
-        self.logger.info("Nb interpretations: %s", len(interpretations))
-        for interpretation in interpretations:
-            intent = interpretation.get("action", {}).get("intent", {})
-            self.logger.info("Intent: %s", intent.get("value"))
-            result['confidence'] = intent.get("confidence")
-            self.logger.info("Confidence: %s", result["confidence"])
-
-            # Get concepts
-            arguments = {}
-            for name, data in interpretation.get("concepts", {}).items():
-                arguments[name] = data[0].get('value')
-            self.logger.info("Arguments: %s", arguments)
-            # TODO log arguments
-            if intent.get("value") == "NO_MATCH":
-                # I don't understand :/
-                # TODO improve me
-                self.logger.critical("No intent matched")
-                result['error'] = "no intent matched"
-                tts = self.dialogs.get_dialog(self.settings.language, "not_understand")
-                return
-
-            # Check intent
-            if len(intent.get("value").rsplit("__", 1)) != 2:
-                # TODO improve me
-                self.logger.critical("BAD Intent name: {}".format(intent.get("value")))
-                result['error'] = "bad intent name - trsx files must me fixed"
-                tts = self.dialogs.get_dialog(self.settings.language, "not_understand")
-                return {"result": result, "tts": tts}
-
-            module, capacity = intent.get("value").rsplit("__", 1)
-            result['module'] = module.replace("__", ".")
-            result['capacity'] = capacity
-            result['arguments'] = arguments
-            result['confidence'] = intent.get("confidence")
-            if intent.get("confidence") < CONFIDENCE_THRESHOLD:
-                # TODO improve me
-                # I'm not sure to understand :/
-                self.logger.info("Module: %s", module)
-                self.logger.info("Capacity: %s", capacity)
-                self.logger.info("Need confirmation - confidence: %s", result['confidence'])
-                result['need_confirmation'] = True
-                tts = self.dialogs.get_dialog(self.settings.language, "uncertain")
-                return {"result": result, "tts": tts}
-
-            # Return result
-            error = result.pop("error")
-            if error:
-                return {"error": error, "result": result}
-            return {"result": result}
+    def _disable_hotword(self):
+        """Disable hotword"""
+        topic = "hotword/disable"
+        data = {"arguments": {}}
+        message = Message(topic=topic, data=data)
+        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
+        self.publish(message)
 
 
 class NLUError(TuxEatPiError):

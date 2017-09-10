@@ -22,7 +22,7 @@ RUN mkdir /workdir
 
 WORKDIR /opt
 COPY setup.py /opt/setup.py
-COPY tuxeatpi_speech_nuance /opt/tuxeatpi_speech_nuance
+COPY tuxeatpi_nlu_nuance /opt/tuxeatpi_nlu_nuance
 RUN python setup.py install
 
 WORKDIR /workdir

@@ -55,12 +55,12 @@ jobs:
           command: |
             . venv/bin/activate
             python setup.py develop
-            pycodestyle --max-line-length=100 tuxeatpi_speech_nuance
-            pylint --rcfile=.pylintrc -r no tuxeatpi_speech_nuance
-            pytest --html=pytest/report.html --self-contained-html --junit-xml=pytest/junit.xml --cov=tuxeatpi_speech_nuance/ --cov-report=term --cov-report=html:pytest/coverage/html --cov-report=xml:pytest/coverage/coverage.xml tests 
+            pycodestyle --max-line-length=100 tuxeatpi_nlu_nuance
+            pylint --rcfile=.pylintrc -r no tuxeatpi_nlu_nuance
+            pytest --html=pytest/report.html --self-contained-html --junit-xml=pytest/junit.xml --cov=tuxeatpi_nlu_nuance/ --cov-report=term --cov-report=html:pytest/coverage/html --cov-report=xml:pytest/coverage/coverage.xml tests 
             # Maybe useless
             coverage combine || true
-            coverage report --include='*/tuxeatpi_speech_nuance/*'
+            coverage report --include='*/tuxeatpi_nlu_nuance/*'
       - store_artifacts:
           path: pytest/
           destination: test_results/
@@ -78,6 +78,6 @@ jobs:
       - run:
           name: Push to Docker Hub
           command: |
-            docker build -t tuxeatpi/speech-nuance:latest -f Dockerfile .
+            docker build -t tuxeatpi/nlu-nuance:latest -f Dockerfile .
             docker login -u $DOCKERHUB_USER -p $DOCKERHUB_PASSWORD
-            docker push tuxeatpi/speech-nuance:latest
+            docker push tuxeatpi/nlu-nuance:latest
