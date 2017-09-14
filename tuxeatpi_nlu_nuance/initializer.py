@@ -29,6 +29,8 @@ class NLUInitializer(Initializer):
         self.get_nuance_cookies()
         intents = self.component.intents.read(self.component.settings.nlu_engine,
                                               recursive=True, wait=False)
+        if intents is None:
+            return
         for intent in intents.children:
             _, _, _, intent_lang, intent_name, component_name, file_name = intent.key.split("/")
             self.component.send_intent(intent_name, intent_lang, component_name,

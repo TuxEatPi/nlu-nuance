@@ -30,6 +30,7 @@ class NLU(TepBaseDaemon):
 
     def main_loop(self):
         """Watch for any changes in etcd intents folder and apply them"""
+        # Handle shutdown
         for data in self.intents.eternal_watch(self.settings.nlu_engine):
             self.logger.info("New intent detected")
             _, _, _, language, context_tag, component_name, file_name = data.key.split("/")
@@ -153,7 +154,7 @@ class NLU(TepBaseDaemon):
                     self.publish(message)
                     return
         # TODO improve this except
-        except Exception as exp:
+        except Exception as exp:  # pylint: disable=W0703
             # Reenable hotword if we have an error
             self.logger.error(exp)
             self._enable_hotword()
@@ -174,6 +175,7 @@ class NLU(TepBaseDaemon):
     @is_mqtt_topic("shutdown")
     def shutdown(self):
         super(NLU, self).shutdown()
+        # TODO Etcd disconnection
         os.kill(os.getpid(), signal.SIGTERM)
 
     @is_mqtt_topic("reload")
@@ -224,7 +226,8 @@ class NLU(TepBaseDaemon):
         if result['confidence'] < self._confidence_threshold:
             # TODO improve me
             # I'm not sure to understand :/
-            self.logger.warning("Need confirmation - confidence: %s - %s", result['confidence'], result)
+            self.logger.warning("Need confirmation - confidence: %s - %s",
+                                result['confidence'], result)
             result['error'] = "NEED_CONFIRMATION"
             return result
         # Something was understood
