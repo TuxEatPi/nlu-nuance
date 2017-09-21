@@ -34,7 +34,9 @@ class NLU(TepBaseDaemon):
         for data in self.intents.eternal_watch(self.settings.nlu_engine):
             self.logger.info("New intent detected")
             _, _, _, language, context_tag, component_name, file_name = data.key.split("/")
-            self.send_intent(context_tag, language, component_name, file_name, data.value)
+            result = self.send_intent(context_tag, language, component_name, file_name, data.value)
+            if result:
+                self.build_model(context_tag, language)
 
     def set_config(self, config):
         """Save the configuration and reload the daemon"""
@@ -96,12 +98,11 @@ class NLU(TepBaseDaemon):
         """Try to understand from microphone"""
         self.logger.info("nlu/audio called")
 
-        self._disable_hotword()
-
         nlu_listening = True
         try:
             while nlu_listening:
                 # Start nlu
+                self._disable_hotword()
                 raw_result = nlu.understand_audio(self.app_id, self.app_key, context_tag,
                                                   self.settings.language)
                 # We got a result
@@ -131,6 +132,13 @@ class NLU(TepBaseDaemon):
                     topic = "speech/say"
                     message = Message(topic=topic, data=data)
                     self.publish(message)
+                    # Wait for starting speak
+                    wait = self.wait_for_speaking()
+                    if not wait:
+                        return
+                    # Quit if we want to exit
+                    if not self._run_main_loop:
+                        return
                     nlu_listening = True
                     continue
                 elif result.get("error") == "CAN_NOT_DO_IT":
@@ -283,7 +291,7 @@ class NLU(TepBaseDaemon):
             if old_model_data == model_data:
                 # Content not changed, do nothing
                 self.logger.info("Intent %s not changed", intent_id)
-                return
+                return False
         # save check model exists
         models = mix.list_models(None, None, self._cookies_file)
         # If models is None we need to renew cookies
@@ -300,15 +308,22 @@ class NLU(TepBaseDaemon):
         with open(model_filepath, "w") as mfh:
             mfh.write(model_data)
         self.logger.info("Uploading %s", intent_id)
-        mix.upload_model(model_fullname, model_filepath, cookies_file=self._cookies_file)
+        mix.upload_model(model_fullname, model_data, cookies_file=self._cookies_file)
+        # Send message for result
+        self.logger.info("Intent %s updated on Mix website", intent_id)
+        return True
+
+    def build_model(self, model_name, model_lang):
+        """Update model in Nuance Mix"""
+        self.logger.info("Building %s/%s", model_lang, model_name)
+        model_fullname = model_name + "__" + model_lang
         # Train model
         mix.train_model(model_fullname, cookies_file=self._cookies_file)
-        self.logger.info("Training %s/%s/%s/%s",
-                         model_lang, model_name, component_name, model_file)
+        self.logger.info("Training %s/%s", model_lang, model_name)
         # Build and create a new version
-        notes = ""
+        notes = "Created by TuxEatPi"
         mix.model_build_create(model_fullname, notes, cookies_file=self._cookies_file)
-        self.logger.info("Create new build %s", intent_id)
+        self.logger.info("Create new build %s", model_fullname)
         # Waiting for model build
         builds = mix.model_build_list(model_fullname, cookies_file=self._cookies_file)
         builds = sorted(builds, key=lambda x: x.get('created_at'))
@@ -320,19 +335,17 @@ class NLU(TepBaseDaemon):
             self.logger.error("Error building model")
             # TODO handle failed
         elif builds[-1].get('build_status') == 'COMPLETED':
-            self.logger.info("Build for %s done", intent_id)
+            self.logger.info("Build for %s done", model_fullname)
         # TODO handle other status
         # TODO detect if the attach is already done
         try:
             mix.model_build_attach(model_fullname, context_tag=model_name,
                                    cookies_file=self._cookies_file)
-            self.logger.info("Build %s ready", intent_id)
+            self.logger.info("Build %s ready", model_fullname)
         except Exception:  # pylint: disable=W0703
             # Build already attached
             # TODO clean this
             pass
-        # Send message for result
-        self.logger.info("Intent %s updated on Mix website", intent_id)
 
     def _enable_hotword(self):
         """Enable hotword"""

@@ -31,7 +31,12 @@ class NLUInitializer(Initializer):
                                               recursive=True, wait=False)
         if intents is None:
             return
+        updated_models = set()
         for intent in intents.children:
             _, _, _, intent_lang, intent_name, component_name, file_name = intent.key.split("/")
-            self.component.send_intent(intent_name, intent_lang, component_name,
-                                       file_name, intent.value)
+            result = self.component.send_intent(intent_name, intent_lang, component_name,
+                                                file_name, intent.value)
+            if result:
+                updated_models.add((intent_name, intent_lang))
+        for model in updated_models:
+            self.component.build_model(model[0], model[1])
