@@ -8,3 +8,6 @@ pycodestyle
 pytest
 pytest-cov==2.5.1
 pytest-html==1.15.1
+colorlog
+psutil
+six==1.10.0

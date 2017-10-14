@@ -8,8 +8,7 @@ import pytest
 
 from tuxeatpi_common.cli import main_cli, set_daemon_class
 from tuxeatpi_nlu_nuance.daemon import NLU
-from tuxeatpi_common.message import Message, MqttClient
-import paho.mqtt.client as paho
+from tuxeatpi_common.message import Message
 
 
 from click.testing import CliRunner

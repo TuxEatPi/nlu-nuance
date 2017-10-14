@@ -4,17 +4,18 @@ import time
 import threading
 
 import pytest
+from wampy.peers import Client
 
 from tuxeatpi_common.cli import main_cli, set_daemon_class
 from tuxeatpi_nlu_nuance.daemon import NLU
-from tuxeatpi_common.message import Message, MqttClient
-import paho.mqtt.client as paho
+from tuxeatpi_common.message import Message
 
 
 from click.testing import CliRunner
 
 def shutdown(self):
     super(NLU, self).shutdown()
+
 
 class TestDaemon(object):
 
@@ -35,18 +36,25 @@ class TestDaemon(object):
         self.speech = False
         self.nlutest = False
 
-        def get_message(mqttc, obj, msg):
-            payload = json.loads(msg.payload.decode())
+        def get_message(message, meta):
+            payload = json.loads(message)
             self.message = payload.get("data", {}).get("arguments", {})
-            if msg.topic == "hotword/disable":
+            if meta['topic'] == "hotword.disable":
                 self.disable = True
-            elif msg.topic == "hotword/enable":
+            elif meta['topic'] == "hotword.enable":
                 self.enable = True
-            elif msg.topic == "speech/say":
-                self.speech = True
-            elif msg.topic == "nlu_test/test":
+            elif meta['topic'] == "nlu_test.test":
                 self.nlutest = True
-            self.message_topic = msg.topic
+            self.message_topic = meta['topic']
+
+        def hotword_disable():
+            self.disable = True
+
+        def hotword_enable():
+            self.enable = True
+
+        def speech_say(text):
+            self.speech = True
 
         def main_loop():
             time.sleep(1)
@@ -57,16 +65,19 @@ class TestDaemon(object):
         self.nlu_daemon.registry.read = fake_registry
         self.nlu_daemon.shutdown = shutdown
 
+        self.wamp_client = Client(realm="tuxeatpi")
+        self.wamp_client.start()
+        self.wamp_client.session._register_procedure("hotword.disable")
+        setattr(self.wamp_client, "hotword.disable", hotword_disable)
 
+        self.wamp_client.session._register_procedure("hotword.enable")
+        setattr(self.wamp_client, "hotword.enable", hotword_enable)
 
-        self.mqtt_client = paho.Client()
-        self.mqtt_client.connect("127.0.0.1", 1883, 60)
-        self.mqtt_client.on_message = get_message
-        self.mqtt_client.subscribe("hotword/disable", 0)
-        self.mqtt_client.subscribe("hotword/enable", 0)
-        self.mqtt_client.subscribe("speech/say", 0)
-        self.mqtt_client.subscribe("nlu_test/test", 0)
-        self.mqtt_client.loop_start()
+        self.wamp_client.session._register_procedure("speech.say")
+        setattr(self.wamp_client, "speech.say", speech_say)
+
+        self.wamp_client.session._subscribe_to_topic(get_message, "nlu_test.test")
+
 
     @classmethod
     def teardown_class(self):
@@ -81,7 +92,7 @@ class TestDaemon(object):
             pass
 
     @pytest.mark.order1
-    def test_time(self, capsys):
+    def test_nlu(self, capsys):
         t = threading.Thread(target=self.nlu_daemon.start)
         t = t.start()
 #        time.sleep(1)
@@ -107,21 +118,20 @@ class TestDaemon(object):
 
 
         from pynuance import nlu
+        nlu.understand_audio = _fake_nlu_text2
+        self.nlu_daemon.audio()
+        time.sleep(1)
+        assert self.disable == True
+        assert self.enable == True
+
+
         nlu.understand_text = _fake_nlu_text2
         self.nlu_daemon.text("What time is it ?")
         time.sleep(1)
 
+        self.nlu_daemon.test()
+
         assert self.speech == True
-        assert self.nlutest == True
-        
-        # Check enable/disable hotword
-        self.nlu_daemon._enable_hotword()
-        self.nlu_daemon._disable_hotword()
-        time.sleep(1)
-        assert self.enable == True
-        assert self.disable == True
-
-
 
         return
 

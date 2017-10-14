@@ -6,7 +6,8 @@ import time
 
 from tuxeatpi_common.daemon import TepBaseDaemon
 from tuxeatpi_common.error import TuxEatPiError
-from tuxeatpi_common.message import Message, is_mqtt_topic
+from tuxeatpi_common.message import Message
+from tuxeatpi_common.wamp import is_wamp_topic, is_wamp_rpc
 from tuxeatpi_nlu_nuance.initializer import NLUInitializer
 from pynuance import nlu
 from pynuance import mix
@@ -31,6 +32,7 @@ class NLU(TepBaseDaemon):
     def main_loop(self):
         """Watch for any changes in etcd intents folder and apply them"""
         # Handle shutdown
+        time.sleep(1)
         for data in self.intents.eternal_watch(self.settings.nlu_engine):
             self.logger.info("New intent detected")
             _, _, _, language, context_tag, component_name, file_name = data.key.split("/")
@@ -53,7 +55,7 @@ class NLU(TepBaseDaemon):
         self._confidence_threshold = config.get("confidence_threshold", 0.7)
         return True
 
-    @is_mqtt_topic("text")
+    @is_wamp_topic("text")
     def text(self, text, context_tag="general"):
         """Try to understand a text"""
         self.logger.info("nlu/text called with test %s", text)
@@ -67,24 +69,15 @@ class NLU(TepBaseDaemon):
         if result.get("error") in ('NO_MATCH', 'BAD_INTENT_NAME'):
             # No match
             self.logger.error(result)
-            data = {"arguments": {"text": self.get_dialog("not_understand")}}
-            topic = "speech/say"
-            message = Message(topic=topic, data=data)
-            self.publish(message)
+            self.call("speech.say", text=self.get_dialog("not_understand"))
             return
         elif result.get("error") == "NEED_CONFIRMATION":
             self.logger.warning(result)
-            data = {"arguments": {"text": self.get_dialog("uncertain")}}
-            topic = "speech/say"
-            message = Message(topic=topic, data=data)
-            self.publish(message)
+            self.call("speech.say", text=self.get_dialog("uncertain"))
             return
         elif result.get("error") == "CAN_NOT_DO_IT":
             self.logger.warning(result)
-            data = {"arguments": {"text": self.get_dialog("uncertain")}}
-            topic = "speech/say"
-            message = Message(topic=topic, data=data)
-            self.publish(message)
+            self.call("speech.say", text=self.get_dialog("can_not_do_it"))
             return
         # Send request
         topic = "/".join((result["component"], result["capacity"]))
@@ -93,7 +86,8 @@ class NLU(TepBaseDaemon):
         self.logger.info("Publish %s with argument %s", message.topic, message.payload)
         self.publish(message)
 
-    @is_mqtt_topic("audio")
+    @is_wamp_rpc("audio")
+    @is_wamp_topic("audio")
     def audio(self, context_tag="general"):
         """Try to understand from microphone"""
         self.logger.info("nlu/audio called")
@@ -101,8 +95,9 @@ class NLU(TepBaseDaemon):
         nlu_listening = True
         try:
             while nlu_listening:
+                # Disable hotword
+                self.call("hotword.disable")
                 # Start nlu
-                self._disable_hotword()
                 raw_result = nlu.understand_audio(self.app_id, self.app_key, context_tag,
                                                   self.settings.language)
                 # We got a result
@@ -113,29 +108,19 @@ class NLU(TepBaseDaemon):
                     # This could mean: microphone muted, nobody spoke, ???
                     # For now, we just do nothing
                     self.logger.warning(result)
-                    self._enable_hotword()
+                    self.call("hotword.enable")
                     return
                 elif result.get("error") in ('NO_MATCH', 'BAD_INTENT_NAME'):
                     # No match
                     self.logger.error("Error %s: %s", result.get("error"), result)
-                    self._enable_hotword()
-                    data = {"arguments": {"text": self.get_dialog("not_understand")}}
-                    topic = "speech/say"
-                    message = Message(topic=topic, data=data)
-                    self.publish(message)
+                    self.call("hotword.enable")
+                    self.call("speech.say", text=self.get_dialog("not_understand"))
                     return
                 elif result.get("error") == "NEED_CONFIRMATION":
                     # Confidence too low
                     self.logger.warning("Confirmation needed: %s", result)
-                    self._enable_hotword()
-                    data = {"arguments": {"text": self.get_dialog("uncertain")}}
-                    topic = "speech/say"
-                    message = Message(topic=topic, data=data)
-                    self.publish(message)
-                    # Wait for starting speak
-                    wait = self.wait_for_speaking()
-                    if not wait:
-                        return
+                    self.call("hotword.enable")
+                    self.call("speech.say", text=self.get_dialog("uncertain"))
                     # Quit if we want to exit
                     if not self._run_main_loop:
                         return
@@ -144,16 +129,13 @@ class NLU(TepBaseDaemon):
                 elif result.get("error") == "CAN_NOT_DO_IT":
                     # missing component
                     self.logger.warning("Capacity not available: %s", result)
-                    self._enable_hotword()
-                    data = {"arguments": {"text": self.get_dialog("can_not_do_it")}}
-                    topic = "speech/say"
-                    message = Message(topic=topic, data=data)
-                    self.publish(message)
+                    self.call("hotword.enable")
+                    self.call("speech.say", text=self.get_dialog("can_not_do_it"))
                     return
                 else:
                     # We can handle the intent
                     nlu_listening = False
-                    self._enable_hotword()
+                    self.call("hotword.enable")
                     # Send request
                     topic = "/".join((result["component"], result["capacity"]))
                     data = {"arguments": result.get("arguments", {})}
@@ -165,28 +147,25 @@ class NLU(TepBaseDaemon):
         except Exception as exp:  # pylint: disable=W0703
             # Reenable hotword if we have an error
             self.logger.error(exp)
-            self._enable_hotword()
+            self.call("hotword.enable")
 
-    @is_mqtt_topic("test")
+    @is_wamp_topic("test")
     def test(self):
         """NLU test to"""
         self.logger.info("nlu/test called")
-        data = {"arguments": {"text": self.get_dialog("i_understand")}}
-        topic = "speech/say"
-        message = Message(topic=topic, data=data)
-        self.publish(message)
+        self.call("speech.say", text=self.get_dialog("i_understand"))
 
-    @is_mqtt_topic("help")
+    @is_wamp_topic("help")
     def help_(self):
         pass
 
-    @is_mqtt_topic("shutdown")
+    @is_wamp_topic("shutdown")
     def shutdown(self):
         super(NLU, self).shutdown()
         # TODO Etcd disconnection
         os.kill(os.getpid(), signal.SIGTERM)
 
-    @is_mqtt_topic("reload")
+    @is_wamp_topic("reload")
     def reload(self):
         pass
 
@@ -346,22 +325,6 @@ class NLU(TepBaseDaemon):
             # Build already attached
             # TODO clean this
             pass
-
-    def _enable_hotword(self):
-        """Enable hotword"""
-        topic = "hotword/enable"
-        data = {"arguments": {}}
-        message = Message(topic=topic, data=data)
-        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
-        self.publish(message)
-
-    def _disable_hotword(self):
-        """Disable hotword"""
-        topic = "hotword/disable"
-        data = {"arguments": {}}
-        message = Message(topic=topic, data=data)
-        self.logger.info("Publish %s with argument %s", message.topic, message.payload)
-        self.publish(message)
 
 
 class NLUError(TuxEatPiError):
