@@ -137,7 +137,7 @@ class NLU(TepBaseDaemon):
                     nlu_listening = False
                     self.call("hotword.enable")
                     # Send request
-                    topic = "/".join((result["component"], result["capacity"]))
+                    topic = ".".join((result["component"], result["capacity"]))
                     data = {"arguments": result.get("arguments", {})}
                     message = Message(topic=topic, data=data)
                     self.logger.info("Publish %s with argument %s", message.topic, message.payload)
